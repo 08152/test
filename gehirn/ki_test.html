@@ -1,0 +1,344 @@
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BODYGUARD AI – Trainingslabor</title>
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 16px;
+    font-family: Arial, sans-serif;
+    background: #10151d;
+    color: #eef3fa;
+}
+main { max-width: 760px; margin: auto; }
+h1 { color: #ff9e43; }
+.panel {
+    background: #1b2532;
+    padding: 17px;
+    margin: 15px 0;
+    border-radius: 12px;
+}
+label { display: block; margin: 12px 0 6px; }
+select, input {
+    width: 100%;
+    padding: 11px;
+    border: 1px solid #526174;
+    border-radius: 7px;
+    background: #0b1017;
+    color: white;
+    font-size: 16px;
+}
+button {
+    width: 100%;
+    padding: 12px;
+    margin-top: 10px;
+    border: 0;
+    border-radius: 8px;
+    background: #ff9e43;
+    color: #171717;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
+button.secondary {
+    background: #35465b;
+    color: white;
+}
+pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #0b1017;
+    padding: 13px;
+    border-radius: 8px;
+    line-height: 1.5;
+}
+.small { color: #c5d0df; line-height: 1.5; }
+.metric {
+    font-size: 24px;
+    color: #ffb56d;
+    font-weight: bold;
+}
+</style>
+</head>
+<body>
+<main>
+<h1>BODYGUARD AI</h1>
+<p class="small">Neuronales Lernlabor · Browser-Prototyp</p>
+
+<div class="panel">
+    <h2>1. Trainingsaufgabe</h2>
+    <p class="small">
+        Das Neuron bekommt mehrere Beispiele. Es soll lernen,
+        bei welchen Eingaben die gewünschte Ausgabe 1 oder 0 ist.
+    </p>
+
+    <label for="datensatz">Trainingsdatensatz</label>
+    <select id="datensatz">
+        <option value="ODER">ODER – mindestens eine Eingabe ist 1</option>
+        <option value="UND">UND – beide Eingaben müssen 1 sein</option>
+    </select>
+
+    <p id="beispiele"></p>
+
+    <label for="epochen">Trainingsdurchläufe (Epochen)</label>
+    <input id="epochen" type="number" min="1" max="20000" value="5000">
+
+    <button id="trainieren">Mit allen Beispielen trainieren</button>
+    <button id="zuruecksetzen" class="secondary">Mit neuen Gewichten starten</button>
+</div>
+
+<div class="panel">
+    <h2>2. Lernergebnis</h2>
+    <p class="small">Mittlerer quadratischer Fehler</p>
+    <div id="fehler" class="metric">Noch nicht trainiert</div>
+    <pre id="ergebnis">Wähle einen Datensatz und starte das Training.</pre>
+</div>
+
+<div class="panel">
+    <h2>3. Modell speichern</h2>
+    <p class="small">
+        Das Modell wird lokal im Browser gespeichert.
+        Es wird dadurch nicht automatisch in deine Python-Dateien übertragen.
+    </p>
+    <button id="speichern">Modell im Browser speichern</button>
+    <button id="laden" class="secondary">Gespeichertes Modell laden</button>
+    <pre id="speicherstatus">Noch keine Aktion.</pre>
+</div>
+
+<div class="panel">
+    <h2>4. Was haben wir gelernt?</h2>
+    <p id="erklaerung" class="small">
+        Nach dem Training werden die Vorhersagen für alle Beispiele angezeigt.
+    </p>
+    <p class="small">
+        Sicherheit: Dieses Testlabor steuert keine Hardware und führt
+        keine echten Roboterbewegungen aus.
+    </p>
+</div>
+</main>
+
+<script>
+"use strict";
+
+const KEY = "bodyguard_ai_lernmodell_v1";
+
+const datensatzFeld = document.getElementById("datensatz");
+const epochenFeld = document.getElementById("epochen");
+const fehlerAnzeige = document.getElementById("fehler");
+const ergebnis = document.getElementById("ergebnis");
+const beispielAnzeige = document.getElementById("beispiele");
+const erklaerung = document.getElementById("erklaerung");
+const speicherstatus = document.getElementById("speicherstatus");
+
+let gewichte = [Math.random() - 0.5, Math.random() - 0.5];
+let bias = 0;
+let trainiert = false;
+let letzterDatensatz = null;
+
+function sigmoid(x) {
+    if (x >= 0) {
+        return 1 / (1 + Math.exp(-Math.min(x, 700)));
+    }
+    const e = Math.exp(Math.max(x, -700));
+    return e / (1 + e);
+}
+
+function datenHolen(name) {
+    const eingaben = [
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1]
+    ];
+
+    const ziele = name === "UND"
+        ? [0, 0, 0, 1]
+        : [0, 1, 1, 1];
+
+    return eingaben.map((x, i) => ({
+        x: x,
+        ziel: ziele[i]
+    }));
+}
+
+function vorwaerts(eingaben) {
+    return sigmoid(
+        eingaben[0] * gewichte[0] +
+        eingaben[1] * gewichte[1] +
+        bias
+    );
+}
+
+function mse(daten) {
+    let summe = 0;
+
+    for (const beispiel of daten) {
+        const fehler = vorwaerts(beispiel.x) - beispiel.ziel;
+        summe += fehler * fehler;
+    }
+
+    return summe / daten.length;
+}
+
+function beispieleAnzeigen() {
+    const daten = datenHolen(datensatzFeld.value);
+
+    beispielAnzeige.textContent =
+        "Eingaben → Zielwert\n" +
+        daten.map(d =>
+            "[" + d.x.join(", ") + "] → " + d.ziel
+        ).join("\n");
+}
+
+function ergebnisAnzeigen(daten, vorherigerFehler) {
+    const aktuellerFehler = mse(daten);
+
+    fehlerAnzeige.textContent = aktuellerFehler.toFixed(8);
+
+    ergebnis.textContent =
+        "Datensatz: " + datensatzFeld.value + "\n" +
+        "Beispiele: " + daten.length + "\n\n" +
+        daten.map(d => {
+            const ausgabe = vorwaerts(d.x);
+            const klasse = ausgabe >= 0.5 ? 1 : 0;
+
+            return "[" + d.x.join(", ") + "]" +
+                " | Ziel: " + d.ziel +
+                " | Ausgabe: " + ausgabe.toFixed(5) +
+                " | Entscheidung: " + klasse;
+        }).join("\n") +
+        "\n\nFehler vorher: " + vorherigerFehler.toFixed(8) +
+        "\nFehler jetzt: " + aktuellerFehler.toFixed(8) +
+        "\nGewichte: [" + gewichte.map(x => x.toFixed(5)).join(", ") + "]" +
+        "\nBias: " + bias.toFixed(5);
+
+    const korrekt = daten.filter(d =>
+        (vorwaerts(d.x) >= 0.5 ? 1 : 0) === d.ziel
+    ).length;
+
+    erklaerung.textContent =
+        "Korrekte Klassifikationen: " + korrekt + " von " +
+        daten.length + ". " +
+        (aktuellerFehler < vorherigerFehler
+            ? "Der mittlere Fehler ist gesunken."
+            : "Der Fehler ist nicht gesunken. Du kannst mit neuen Gewichten erneut trainieren.") +
+        " Das ist ein einzelnes Neuron und kein vollständiges Robotergehirn.";
+
+    trainiert = true;
+    letzterDatensatz = datensatzFeld.value;
+}
+
+document.getElementById("trainieren").addEventListener("click", () => {
+    const epochen = Number(epochenFeld.value);
+
+    if (!Number.isInteger(epochen) || epochen < 1 || epochen > 20000) {
+        ergebnis.textContent = "Bitte eine ganze Zahl zwischen 1 und 20000 eingeben.";
+        return;
+    }
+
+    const daten = datenHolen(datensatzFeld.value);
+    const vorherigerFehler = mse(daten);
+    const lernrate = 0.5;
+
+    // SGD: alle Beispiele werden pro Epoche in zufälliger Reihenfolge gelernt.
+    for (let epoche = 0; epoche < epochen; epoche++) {
+        const gemischt = [...daten];
+
+        for (let i = gemischt.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [gemischt[i], gemischt[j]] = [gemischt[j], gemischt[i]];
+        }
+
+        for (const beispiel of gemischt) {
+            const ausgabe = vorwaerts(beispiel.x);
+
+            // Gradienten für Sigmoid + binäre Kreuzentropie
+            const gradient = ausgabe - beispiel.ziel;
+
+            gewichte[0] -= lernrate * gradient * beispiel.x[0];
+            gewichte[1] -= lernrate * gradient * beispiel.x[1];
+            bias -= lernrate * gradient;
+        }
+    }
+
+    ergebnisAnzeigen(daten, vorherigerFehler);
+});
+
+document.getElementById("zuruecksetzen").addEventListener("click", () => {
+    gewichte = [Math.random() - 0.5, Math.random() - 0.5];
+    bias = 0;
+    trainiert = false;
+    letzterDatensatz = null;
+    fehlerAnzeige.textContent = "Noch nicht trainiert";
+    ergebnis.textContent = "Neue zufällige Gewichte wurden erzeugt.";
+    erklaerung.textContent = "Starte ein neues Training.";
+});
+
+document.getElementById("speichern").addEventListener("click", () => {
+    try {
+        const daten = {
+            version: 1,
+            gewichte: gewichte,
+            bias: bias,
+            datensatz: letzterDatensatz,
+            trainiert: trainiert
+        };
+
+        localStorage.setItem(KEY, JSON.stringify(daten));
+        speicherstatus.textContent =
+            "Modell erfolgreich im Browser gespeichert.";
+    } catch (fehler) {
+        speicherstatus.textContent =
+            "Speichern fehlgeschlagen: " + fehler.message +
+            "\nMöglicherweise erlaubt der Browser keinen lokalen Speicher.";
+    }
+});
+
+document.getElementById("laden").addEventListener("click", () => {
+    try {
+        const text = localStorage.getItem(KEY);
+
+        if (!text) {
+            throw new Error("Es wurde noch kein Modell gespeichert.");
+        }
+
+        const daten = JSON.parse(text);
+
+        if (
+            daten.version !== 1 ||
+            !Array.isArray(daten.gewichte) ||
+            daten.gewichte.length !== 2 ||
+            !daten.gewichte.every(Number.isFinite) ||
+            !Number.isFinite(daten.bias) ||
+            !["ODER", "UND"].includes(daten.datensatz)
+        ) {
+            throw new Error("Die gespeicherten Modelldaten sind ungültig.");
+        }
+
+        gewichte = [...daten.gewichte];
+        bias = daten.bias;
+        trainiert = Boolean(daten.trainiert);
+        letzterDatensatz = daten.datensatz;
+
+        datensatzFeld.value = daten.datensatz;
+        beispieleAnzeigen();
+
+        const datensatz = datenHolen(datensatzFeld.value);
+        ergebnisAnzeigen(datensatz, mse(datensatz));
+
+        speicherstatus.textContent = "Modell geladen.";
+    } catch (fehler) {
+        speicherstatus.textContent = "Laden fehlgeschlagen: " + fehler.message;
+    }
+});
+
+datensatzFeld.addEventListener("change", beispieleAnzeigen);
+beispieleAnzeigen();
+</script>
+</body>
+</html>
