@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BODYGUARD AI – Kameratest</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #101722;
+    color: #eef6ff;
+    font-family: Arial, sans-serif;
+  }
+  header {
+    padding: 14px;
+    background: #17283b;
+    border-bottom: 2px solid #2698ff;
+  }
+  h1 { margin: 0 0 5px; font-size: 25px; }
+  #status { color: #ffd166; font-size: 14px; }
+  .views {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 8px;
+  }
+  .view {
+    min-width: 0;
+    background: #1c2938;
+    border: 1px solid #38516b;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .view h2 {
+    font-size: 15px;
+    margin: 0;
+    padding: 10px;
+    background: #20364d;
+  }
+  .canvas-wrap { width: 100%; height: 42vh; min-height: 230px; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .panel { padding: 12px; margin: 0 8px 8px; background: #17283b; border-radius: 10px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    border: 0; border-radius: 8px; padding: 12px 15px;
+    color: white; background: #147bd1; font-size: 15px;
+  }
+  button.stop { background: #b83240; }
+  #details { line-height: 1.7; font-size: 14px; }
+  @media (max-width: 650px) {
+    .views { grid-template-columns: 1fr; }
+    .canvas-wrap { height: 35vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 BODYGUARD AI</h1>
+  <div>3D-Roboter · Frontkamera + Hinterkamera · Hindernistest</div>
+  <div id="status">Verbinde mit Python …</div>
+</header>
+
+<div class="views">
+  <section class="view">
+    <h2>📷 HINTERKAMERA – Blick von hinten</h2>
+    <div class="canvas-wrap"><canvas id="rearCanvas"></canvas></div>
+  </section>
+  <section class="view">
+    <h2>📷 FRONTKAMERA – Blick nach vorne</h2>
+    <div class="canvas-wrap"><canvas id="frontCanvas"></canvas></div>
+  </section>
+</div>
+
+<div class="panel">
+  <div class="buttons">
+    <button id="startBtn">▶ Start / Weiter</button>
+    <button id="pauseBtn">Ⅱ Pause</button>
+    <button id="resetBtn">↻ Welt zurücksetzen</button>
+    <button class="stop" id="stopBtn">■ Not-Stopp</button>
+  </div>
+</div>
+
+<div class="panel" id="details">
+  Schritte: 0 · Hindernisse: 0
+</div>
+
+<script type="module">
+import * as THREE from
+  'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js';
+
+const statusEl = document.getElementById('status');
+const detailsEl = document.getElementById('details');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9bbbd5);
+scene.fog = new THREE.Fog(0x9bbbd5, 24, 65);
+
+const worldSize = 36;
+const robotSpeed = 2.4;
+const robotRadius = 0.55;
+
+function makeRenderer(canvas) {
+  const r = new THREE.WebGLRenderer({ canvas, antialias: true });
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  r.setSize(canvas.clientWidth, canvas.clientHeight, false);
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  return r;
+}
+
+const rearCanvas = document.getElementById('rearCanvas');
+const frontCanvas = document.getElementById('frontCanvas');
+const rearRenderer = makeRenderer(rearCanvas);
+const frontRenderer = makeRenderer(frontCanvas);
+
+const rearCamera = new THREE.PerspectiveCamera(65, 1, 0.1, 100);
+const frontCamera = new THREE.PerspectiveCamera(78, 1, 0.1, 100);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x526174, 2));
+
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(-8, 15, 7);
+sun.castShadow = true;
+scene.add(sun);
+
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(worldSize, worldSize),
+  new THREE.MeshStandardMaterial({ color: 0x9ba5b1, roughness: 0.9 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const grid = new THREE.GridHelper(worldSize, 36, 0x536579, 0x7b8998);
+grid.position.y = 0.015;
+scene.add(grid);
+
+// Begrenzungswände
+const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x43546a });
+function addWall(x, z, width, depth) {
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(width, 1.2, depth), wallMaterial
+  );
+  wall.position.set(x, 0.6, z);
+  wall.castShadow = true;
+  wall.receiveShadow = true;
+  scene.add(wall);
+}
+addWall(0, -worldSize / 2, worldSize, 0.5);
+addWall(0, worldSize / 2, worldSize, 0.5);
+addWall(-worldSize / 2, 0, 0.5, worldSize);
+addWall(worldSize / 2, 0, 0.5, worldSize);
+
+// Hindernisse
+const obstacles = [];
+const obstaclePositions = [
+  [-5, -5], [4, -7], [7, -1], [-7, 3],
+  [1, 4], [-2, 9], [9, 8], [-10, -9],
+  [11, -8], [-11, 10]
+];
+
+for (const [x, z] of obstaclePositions) {
+  const size = 1.4 + Math.random() * 0.8;
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(size, size, size),
+    new THREE.MeshStandardMaterial({ color: 0x687382, roughness: 0.85 })
+  );
+  mesh.position.set(x, size / 2, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  obstacles.push({ x, z, radius: size * 0.72, mesh });
+}
+
+// Zielpunkt
+const goal = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.7, 0.7, 0.08, 32),
+  new THREE.MeshStandardMaterial({
+    color: 0x48ff83, emissive: 0x147a34, emissiveIntensity: 1.3
+  })
+);
+goal.position.set(0, 0.06, -14);
+scene.add(goal);
+
+// Einfacher humanoider Roboter
+const robot = new THREE.Group();
+scene.add(robot);
+
+const white = new THREE.MeshStandardMaterial({ color: 0xdce6ef, metalness: 0.45, roughness: 0.35 });
+const dark = new THREE.MeshStandardMaterial({ color: 0x273648, metalness: 0.6, roughness: 0.35 });
+const blue = new THREE.MeshStandardMaterial({
+  color: 0x00baff, emissive: 0x0077bb, emissiveIntensity: 1.4
+});
+
+function part(parent, geometry, material, x, y, z) {
+  const m = new THREE.Mesh(geometry, material);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+part(robot, new THREE.BoxGeometry(0.9, 1.0, 0.48), white, 0, 1.45, 0);
+part(robot, new THREE.BoxGeometry(0.35, 0.5, 0.12), blue, 0, 1.48, -0.27);
+part(robot, new THREE.SphereGeometry(0.34, 24, 16), white, 0, 2.25, 0);
+part(robot, new THREE.BoxGeometry(0.42, 0.09, 0.08), blue, 0, 2.25, -0.30);
+part(robot, new THREE.CylinderGeometry(0.13, 0.13, 0.18, 16), dark, 0, 1.96, 0);
+
+const legs = [];
+const arms = [];
+for (const side of [-1, 1]) {
+  const leg = new THREE.Group();
+  leg.position.set(side * 0.25, 0.95, 0);
+  robot.add(leg);
+  part(leg, new THREE.BoxGeometry(0.25, 0.65, 0.28), dark, 0, -0.2, 0);
+  part(leg, new THREE.BoxGeometry(0.32, 0.16, 0.48), white, 0, -0.53, -0.07);
+  legs.push(leg);
+
+  const arm = new THREE.Group();
+  arm.position.set(side * 0.57, 1.75, 0);
+  robot.add(arm);
+  part(arm, new THREE.SphereGeometry(0.16, 16, 12), dark, 0, 0, 0);
+  part(arm, new THREE.BoxGeometry(0.2, 0.55, 0.22), white, 0, -0.32, 0);
+  part(arm, new THREE.BoxGeometry(0.18, 0.22, 0.2), dark, 0, -0.68, 0);
+  arms.push(arm);
+}
+
+// Vorne gerichtete kleine Markierung
+const frontMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.08, 12, 8), blue
+);
+frontMarker.position.set(0, 2.25, -0.38);
+robot.add(frontMarker);
+
+let running = true;
+let stopped = false;
+let steps = 0;
+let walkTime = 0;
+let brainBusy = false;
+let lastBrainRequest = 0;
+let action = { drehen: 0.5, geschwindigkeit: 0 };
+let brainConnected = false;
+let lastError = '';
+let lastSensors = [0, 0, 0];
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function getSensors() {
+  const px = robot.position.x;
+  const pz = robot.position.z;
+  const fx = -Math.sin(robot.rotation.y);
+  const fz = -Math.cos(robot.rotation.y);
+  const lx = -Math.cos(robot.rotation.y);
+  const lz = Math.sin(robot.rotation.y);
+  const sensors = [0, 0, 0]; // links, vorne, rechts
+
+  for (const o of obstacles) {
+    const dx = o.x - px;
+    const dz = o.z - pz;
+    const forward = dx * fx + dz * fz;
+    const side = dx * lx + dz * lz;
+    if (forward < -0.5 || forward > 6) continue;
+    const near = clamp((6 - forward) / 6, 0, 1);
+    if (side > 0 && side < 3) sensors[0] = Math.max(sensors[0], near * (1 - side / 3));
+    if (side < 0 && side > -3) sensors[2] = Math.max(sensors[2], near * (1 + side / 3));
+    if (Math.abs(side) < 1.1) sensors[1] = Math.max(sensors[1], near);
+  }
+  return sensors;
+}
+
+async function askBrain(sensors) {
+  if (brainBusy || stopped) return;
+  brainBusy = true;
+  try {
+    const response = await fetch('/api/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sensoren: sensors })
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (!Number.isFinite(data.drehen) || !Number.isFinite(data.geschwindigkeit)) {
+      throw new Error('Ungültige Antwort vom Python-Gehirn');
+    }
+    action = {
+      drehen: clamp(data.drehen, 0, 1),
+      geschwindigkeit: clamp(data.geschwindigkeit, 0, 0.85)
+    };
+    brainConnected = true;
+    lastError = '';
+  } catch (e) {
+    brainConnected = false;
+    lastError = e.message;
+    action.geschwindigkeit = 0;
+  } finally {
+    brainBusy = false;
+  }
+}
+
+function moveRobot(dt, now) {
+  lastSensors = getSensors();
+
+  if (now - lastBrainRequest > 180 && !brainBusy) {
+    lastBrainRequest = now;
+    askBrain(lastSensors);
+  }
+
+  // Stoppen, falls Python nicht erreichbar ist.
+  if (!brainConnected || stopped) {
+    action.geschwindigkeit = 0;
+    return;
+  }
+
+  let turn = (action.drehen - 0.5) * 3.0;
+
+  // Sicherheitsgrenzen der Arena
+  const edge = worldSize / 2 - 2;
+  if (robot.position.x > edge) turn = -1.3;
+  if (robot.position.x < -edge) turn = 1.3;
+  if (robot.position.z > edge) turn = 1.3;
+  if (robot.position.z < -edge) turn = -1.3;
+
+  robot.rotation.y += clamp(turn, -1.5, 1.5) * dt;
+
+  let speed = robotSpeed * action.geschwindigkeit;
+  if (lastSensors[1] > 0.82) speed = 0;
+
+  const dx = -Math.sin(robot.rotation.y) * speed * dt;
+  const dz = -Math.cos(robot.rotation.y) * speed * dt;
+  const nx = robot.position.x + dx;
+  const nz = robot.position.z + dz;
+
+  const inBounds = Math.abs(nx) < edge && Math.abs(nz) < edge;
+  const blocked = obstacles.some(o =>
+    Math.hypot(nx - o.x, nz - o.z) < o.radius + robotRadius
+  );
+
+  if (inBounds && !blocked && speed > 0) {
+    robot.position.x = nx;
+    robot.position.z = nz;
+    steps++;
+  }
+
+  walkTime += dt;
+  const swing = speed > 0 && inBounds && !blocked ? Math.sin(walkTime * 8) * 0.35 : 0;
+  legs[0].rotation.x = swing;
+  legs[1].rotation.x = -swing;
+  arms[0].rotation.x = -swing * 0.6;
+  arms[1].rotation.x = swing * 0.6;
+}
+
+function updateCameras() {
+  // Kamera hinter dem Roboter: lokales +Z liegt hinter ihm.
+  const rearOffset = new THREE.Vector3(0, 3.2, 6.0)
+    .applyQuaternion(robot.quaternion);
+  const rearTarget = robot.position.clone().add(rearOffset);
+  rearCamera.position.lerp(rearTarget, 0.12);
+  const lookAt = robot.position.clone();
+  lookAt.y += 1.2;
+  rearCamera.lookAt(lookAt);
+
+  // Frontkamera am Kopf: blickt nach vorne entlang der lokalen -Z-Achse.
+  const frontPosition = new THREE.Vector3(0, 2.2, -0.38)
+    .applyQuaternion(robot.quaternion)
+    .add(robot.position);
+  const frontDirection = new THREE.Vector3(0, 0, -1)
+    .applyQuaternion(robot.quaternion);
+  frontCamera.position.copy(frontPosition);
+  frontCamera.lookAt(frontPosition.clone().add(frontDirection.multiplyScalar(10)));
+}
+
+function resize() {
+  for (const [renderer, camera, canvas] of [
+    [rearRenderer, rearCamera, rearCanvas],
+    [frontRenderer, frontCamera, frontCanvas]
+  ]) {
+    const w = Math.max(1, canvas.clientWidth);
+    const h = Math.max(1, canvas.clientHeight);
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+}
+
+window.addEventListener('resize', resize);
+
+function updateText() {
+  const sensorText = lastSensors.map(v => v.toFixed(2)).join(' / ');
+  const brainText = brainConnected
+    ? 'Python-Gehirn verbunden'
+    : 'Python-Gehirn nicht verbunden' + (lastError ? ': ' + lastError : '');
+  statusEl.textContent = stopped ? 'NOT-STOPP aktiv' :
+    !running ? 'Pause' : brainText;
+  statusEl.style.color = brainConnected && !stopped ? '#73ff9b' : '#ffd166';
+  detailsEl.textContent =
+    `Schritte: ${steps} · Hindernisse: ${obstacles.length} · ` +
+    `Sensoren links/vorne/rechts: ${sensorText} · ` +
+    `Drehung: ${action.drehen.toFixed(2)} · Tempo: ${action.geschwindigkeit.toFixed(2)}`;
+}
+
+let previous = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - previous) / 1000, 0.05);
+  previous = now;
+
+  if (running && !stopped) moveRobot(dt, now);
+  updateCameras();
+  resize();
+  rearRenderer.render(scene, rearCamera);
+  frontRenderer.render(scene, frontCamera);
+  updateText();
+}
+requestAnimationFrame(animate);
+
+function resetRobot() {
+  robot.position.set(0, 0, 12);
+  robot.rotation.set(0, Math.PI, 0);
+  steps = 0;
+  walkTime = 0;
+  stopped = false;
+  running = true;
+  brainConnected = false;
+  action = { drehen: 0.5, geschwindigkeit: 0 };
+  statusEl.textContent = 'Warte auf Python-Gehirn …';
+}
+
+document.getElementById('startBtn').onclick = () => {
+  stopped = false;
+  running = true;
+  lastBrainRequest = 0;
+};
+document.getElementById('pauseBtn').onclick = () => {
+  running = false;
+  action.geschwindigkeit = 0;
+};
+document.getElementById('stopBtn').onclick = () => {
+  stopped = true;
+  running = false;
+  action.geschwindigkeit = 0;
+  statusEl.textContent = 'NOT-STOPP aktiv';
+};
+document.getElementById('resetBtn').onclick = resetRobot;
+
+resetRobot();
+</script>
+</body>
+</html>

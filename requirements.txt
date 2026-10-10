@@ -1,0 +1,4 @@
+
+# Das Grundsystem verwendet nur die Python-Standardbibliothek.
+# Für die spätere Physiksimulation können wir MuJoCo ergänzen:
+# mujoco
